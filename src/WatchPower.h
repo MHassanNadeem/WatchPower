@@ -1,17 +1,20 @@
 #pragma once
 
 /* WatchPower library by Hassan Nadeem
- */
+*/
 
+#include "Arduino.h"
 #include "Particle.h"
 #include <stdint.h>
-#include "application.h"
-#include "Stream.h"
 
 #define CRC_HIGH_BYTE( crc )   ((crc) >> 8) & 0xFF
 #define CRC_LOW_BYTE( crc )    (crc) & 0xFF
 
-#define DBG(str) Particle.publish("DEBUG "#str, String(str))
+#define DBG(str)                                       \
+    do{                                                \
+        delay(1000);  /* To avoid rate limit */        \
+        Particle.publish("DEBUG "#str, String(str));   \
+    }while(0)
 
 #define strncpyTerminated(destination, source, num)   \
     do{                                               \
@@ -20,16 +23,24 @@
     }while(0)
 
 class WatchPower{
+    /* All enums are position sensitive */
+    enum class OutputSourcePriorities{UtilityFirst, SolarFirst, SBU};
+    enum class ChargePriorities{UtilityFirst, SolarFirst, SolarAndUtility, SolarOnly};
+    enum class BatteryTypes{AGM, Flooded, User};
+    enum class BatteryRechargeVoltages{V22, V22_5, V23, V23_5, V24, V24_5, V25, V25_5};
+    static constexpr char *BatteryRechargeVoltages2Str[] = {
+        "22", "22.5", "23", "23.5", "24", "24.5", "25", "25.5"
+    };
+    enum class BatteryReDischargeVoltages{Full, V25, V25_5, V26, V26_5, V27, V27_5, V28, V28_5, V29};
+    static constexpr char *BatteryReDischargeVoltages2Str[] = {
+        "00.0", "25", "25.5", "26", "26.5", "27", "27.5", "28", "28.5", "29"
+    };
+
     struct floatEntry{
         char str[10];
         float flt;
     };
 
-    // hxn todo
-    struct modeEntry{
-        char c;
-        bool battery;
-    };
 
     struct statusEntry{
         char str[8+1]; /* 8 bits */
@@ -48,6 +59,18 @@ class WatchPower{
         } status;
     };
 
+    struct flagEntry{
+        bool buzzer;
+        bool overLoadBypass;
+        bool powerSaving;
+        bool lcdTimeout;
+        bool overloadRestart;
+        bool overTemperatureRestart;
+        bool backlight;
+        bool alarm;
+        bool faultCodeRecord;
+    };
+
     struct warningEntry{
         char str[32+1]; /* 32 bits */
         union{
@@ -62,28 +85,34 @@ class WatchPower{
                 bool opvShort:1;
                 bool inverterVoltageTooLow:1;
                 bool interverVoltageTooHigh:1;
-                bool overTemperature;
-                bool fanLocked;
-                bool batteryVoltageHigh;
-                bool batteryVoltageLow;
-                bool reserved_a13;
-                bool overLoad;
-                bool eepromFault;
-                bool inverterOverCurrent;
-                bool inverterSoftFail;
-                bool selfTestFail;
-                bool dcVoltageOver;
-                bool batteryOpen;
-                bool currentSensorFail;
-                bool batteryShort;
-                bool powerLimit;
-                bool pvVoltageHigh;
-                bool mpptOverload;
+                bool overTemperature:1;
+                bool fanLocked:1;
+                bool batteryVoltageHigh:1;
+                bool batteryLowAlarm:1;
+                bool reserved_a13:1;
+                bool batteryUnderShutdown:1;
+                bool reserved_a15:1;
+                bool overLoad:1;
+                bool eepromFault:1;
+                bool inverterOverCurrent:1;
+                bool inverterSoftFail:1;
+                bool selfTestFail:1;
+                bool opdcVoltageOver:1;
+                bool batteryOpen:1;
+                bool currentSensorFail:1;
+                bool batteryShort:1;
+                bool powerLimit:1;
+                bool pvVoltageHigh:1;
+                bool mpptOverloadFault:1;
+                bool mpptOverloadWarning:1;
+                bool batteryTooLowToCharge:1;
+                bool reserved_a30:1;
+                bool reserved_a31:1;
             } bits;
         } warning;
     };
 
-    private:
+private:
     /* Device general status parameters inquiry */
     static constexpr char *CMD_GENERAL_STATUS = "QPIGS\xB7\xA9";
     /* Device Mode inquiry */
@@ -98,6 +127,8 @@ class WatchPower{
     static constexpr char *CMD_FIRMWARE_SEC_VER_INQUIRY = "QVFW2\xC3\xF5";
     /* Device Rating Information inquiry */
     static constexpr char *CMD_RATING_INQUIRY = "QPIRI\xF8\x54";
+    /* Device flag status inquiry */
+    static constexpr char *CMD_FLAG_INQUIRY = "QFLAG\x98\x74";
 
 
     HardwareSerial* refSer;
@@ -109,76 +140,70 @@ class WatchPower{
     uint16_t readLine(char *buffer, uint16_t length);
     void sendLine(const char *str);
     bool querySolar(const char *query, char *buffer, uint16_t bufferLen);
+    bool isACK(const char *str);
+    bool isNACK(const char *str);
+    /* --- Parsing Functions --- */
     void parseQPIGS(const char *buffer);
     void parseQMOD(const char *buffer);
-    void parseQPIWS(const char *buffer);
+    void parseWarnings(const char *buffer);
+    void parseSerialNumber(const char *buffer);
+    void parseFirmwareVerPrimary(const char *buffer);
+    void parseFirmwareVerSecondary(const char *buffer);
+    void parseRating(const char *buffer);
+    void parseFlags(const char *buffer);
     /*--------------------------------*/
+
+
+public:
+    char serialNumer[15];
+    char firmwareVerPrimary[9];
+    char firmwareVerSecondary[9];
+
+    flagEntry flags;
+
+    /* QMODE */
+    char mode;
+    /* QPIGS */
+    floatEntry gridVoltage;
+    floatEntry gridFreq;
+    floatEntry outputVoltage;
+    floatEntry outputFreq;
+    floatEntry outputPowerApparent;
+    floatEntry outputPowerActive;
+    floatEntry loadPercent;
+    floatEntry busVoltage;
+    floatEntry batteryVoltage;
+    floatEntry batteryCurrent;
+    floatEntry batteryCapacity;
+    floatEntry temperature;
+    floatEntry solarCurrent;
+    floatEntry solarVoltage;
+    floatEntry batteryVoltageSCC;
+    floatEntry batteryDischargeCurrent;
+    statusEntry status;
+    warningEntry warning;
+
+    /* Constructor and Destructor */
+    WatchPower(HardwareSerial &_refSer);
+    ~WatchPower();
+
+    /* Get parameters */
+    bool refreshData();
+    bool refreshDeviceConstants();
+    bool refreshSettings();
+
+    /*  */
+    bool isOnBattery();
+    bool isOnGrid();
     bool isCharging();
     bool isSolarCharging();
     bool isGridCharging();
 
-    public:
-      char serialNumer[15];
-      char firmwareVerPrimary[9];
-      char firmwareVerSecondary[9];
+    /* Set parameters */
+    bool setOutputSourcePriority(OutputSourcePriorities prio);
+    bool setBatteryType(BatteryTypes batteryType);
+    bool setChargePriority(ChargePriorities prio);
+    bool setBatteryRechargeVoltage(BatteryRechargeVoltages voltage);
+    bool setBatteryReDischargeVoltage(BatteryReDischargeVoltages voltage);
 
-      /* QMODE */
-      char mode;
-      /* QPIGS */
-      floatEntry gridVoltage;
-      floatEntry gridFreq;
-      floatEntry outputVoltage;
-      floatEntry outputFreq;
-      floatEntry outputPowerApparent;
-      floatEntry outputPowerActive;
-      floatEntry loadPercent;
-      floatEntry busVoltage;
-      floatEntry batteryVoltage;
-      floatEntry batteryCurrent;
-      floatEntry batteryCapacity;
-      floatEntry temperature;
-      floatEntry solarCurrent;
-      floatEntry solarVoltage;
-      floatEntry batteryVoltageSCC;
-      floatEntry batteryDischargeCurrent;
-      statusEntry status;
-      warningEntry warning;
-
-      WatchPower(HardwareSerial &_refSer);
-      ~WatchPower();
-
-      bool collectData();
-
-      void parseSerialNumber(const char *buffer){
-        strncpyTerminated(serialNumer, buffer+1,14);
-      }
-
-      void parseFirmwareVerPrimary(const char *buffer){
-        strncpyTerminated(firmwareVerPrimary, buffer+7,8);
-      }
-
-      void parseFirmwareVerSecondary(const char *buffer){
-        strncpyTerminated(firmwareVerSecondary, buffer+8,8);
-      }
-
-      void oneTimeData(){
-        char inputBuffer[256];
-
-        querySolar(CMD_SERIAL_INQUIRY, inputBuffer, sizeof(inputBuffer));
-        parseSerialNumber(inputBuffer);
-
-        querySolar(CMD_FIRMWARE_PRIM_VER_INQUIRY, inputBuffer, sizeof(inputBuffer));
-        parseFirmwareVerPrimary(inputBuffer);
-
-        querySolar(CMD_FIRMWARE_SEC_VER_INQUIRY, inputBuffer, sizeof(inputBuffer));
-        parseFirmwareVerSecondary(inputBuffer);
-      }
-
-      void parseRating(const char *buffer){
-        char inputBuffer[256];
-
-        querySolar(CMD_RATING_INQUIRY, inputBuffer, sizeof(inputBuffer));
-
-        DBG(inputBuffer);
-      }
 };

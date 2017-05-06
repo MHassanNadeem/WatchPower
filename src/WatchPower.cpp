@@ -1,5 +1,5 @@
 /* WatchPower library by Hassan Nadeem
- */
+*/
 
 #include "WatchPower.h"
 
@@ -7,16 +7,17 @@ WatchPower::WatchPower(HardwareSerial &_refSer){
     refSer = &_refSer;
 
     /* Communication format for OptiSolar
-     * Baud Rate: 2400
-     * Start Bit: 1
-     * Data Bit: 8
-     * Parity Bit: No
-     * Stop Bit: 1 */
+    * Baud Rate: 2400
+    * Start Bit: 1
+    * Data Bit: 8
+    * Parity Bit: No
+    * Stop Bit: 1 */
     refSer->begin( 2400 );
 
     delay(100); /* Wait for serial port init */
 
-    oneTimeData();
+    refreshDeviceConstants();
+    refreshSettings();
 }
 
 WatchPower::~WatchPower(){
@@ -24,7 +25,7 @@ WatchPower::~WatchPower(){
 }
 
 /* CRC-CCITT (XModem)
- * Source: http://web.mit.edu/6.115/www/amulet/xmodem.htm */
+* Source: http://web.mit.edu/6.115/www/amulet/xmodem.htm */
 uint16_t WatchPower::calculateCRC(char *ptr, int count){
     int  crc;
     char i;
@@ -34,9 +35,9 @@ uint16_t WatchPower::calculateCRC(char *ptr, int count){
         i = 8;
         do{
             if (crc & 0x8000){
-            	crc = crc << 1 ^ 0x1021;
+                crc = crc << 1 ^ 0x1021;
             }else{
-            	crc = crc << 1;
+                crc = crc << 1;
             }
         }while(--i);
     }
@@ -61,6 +62,18 @@ bool WatchPower::validateCRC(char *str, uint16_t len){
 
     return CRC_HIGH_BYTE(crc) == str[len-2] && CRC_LOW_BYTE(crc) == str[len-1];
 }
+
+bool WatchPower::isACK(const char *str){
+    /* If found, skip the start byte */
+    if(str[0] == '(') str++;
+
+    return strstr(str, "ACK") == str;
+}
+
+bool WatchPower::isNACK(const char *str){
+    return !isACK(str);
+}
+
 
 void WatchPower::clearInputBuffer(){
     while( refSer->available() ) refSer->read();
@@ -143,7 +156,7 @@ void WatchPower::parseQMOD(const char *buffer){
     mode = buffer[0];
 }
 
-void WatchPower::parseQPIWS(const char *buffer){
+void WatchPower::parseWarnings(const char *buffer){
     buffer++; /* Skip start byte '(' */
 
     strncpyTerminated(warning.str, buffer, 32);
@@ -155,7 +168,7 @@ void WatchPower::parseQPIWS(const char *buffer){
     }
 }
 
-bool WatchPower::collectData(){
+bool WatchPower::refreshData(){
     bool error = false;
     char inputBuffer[256];
 
@@ -168,21 +181,173 @@ bool WatchPower::collectData(){
     // Particle.publish("_QMOD", inputBuffer);
 
     error |= querySolar(CMD_WARNING_STATUS, inputBuffer, sizeof(inputBuffer));
-    parseQPIWS(inputBuffer);
+    parseWarnings(inputBuffer);
     // Particle.publish("Warn", inputBuffer);
 
     return error;
 }
 
+bool WatchPower::refreshDeviceConstants(){
+    bool error = false;
+    char inputBuffer[256];
+
+    error |= querySolar(CMD_SERIAL_INQUIRY, inputBuffer, sizeof(inputBuffer));
+    parseSerialNumber(inputBuffer);
+
+    error |= querySolar(CMD_FIRMWARE_PRIM_VER_INQUIRY, inputBuffer, sizeof(inputBuffer));
+    parseFirmwareVerPrimary(inputBuffer);
+
+    error |= querySolar(CMD_FIRMWARE_SEC_VER_INQUIRY, inputBuffer, sizeof(inputBuffer));
+    parseFirmwareVerSecondary(inputBuffer);
+
+    return error;
+}
+
+bool WatchPower::refreshSettings(){
+    bool error = false;
+    char inputBuffer[256];
+
+    error |= querySolar(CMD_FLAG_INQUIRY, inputBuffer, sizeof(inputBuffer));
+    parseFlags(inputBuffer);
+
+    error |= querySolar(CMD_RATING_INQUIRY, inputBuffer, sizeof(inputBuffer));
+    parseRating(inputBuffer);
+
+    return error;
+}
 
 bool WatchPower::isCharging(){
-  return status.status.bits.chargingStatus;
+    return status.status.bits.chargingStatus;
 }
 
 bool WatchPower::isSolarCharging(){
-  return status.status.bits.sccChargingStatus;
+    return status.status.bits.sccChargingStatus;
 }
 
 bool WatchPower::isGridCharging(){
-  return status.status.bits.acChargingStatus;
+    return status.status.bits.acChargingStatus;
+}
+
+bool WatchPower::isOnBattery(){
+    return mode == 'B';
+}
+
+bool WatchPower::isOnGrid(){
+    return !isOnBattery();
+}
+
+
+bool WatchPower::setOutputSourcePriority(OutputSourcePriorities prio){
+    char command[50];
+    char inputBuffer[25];
+
+    /* Make Command */
+    sprintf(command, "POP%02u", prio);
+    appendCRC(command);
+
+    int error = querySolar(command, inputBuffer, sizeof(inputBuffer));
+
+    return (error == false && isACK(inputBuffer));
+}
+
+bool WatchPower::setChargePriority(ChargePriorities prio){
+    char command[50];
+    char inputBuffer[25];
+
+    /* Make Command */
+    sprintf(command, "PCP%02u", prio);
+    appendCRC(command);
+
+    int error = querySolar(command, inputBuffer, sizeof(inputBuffer));
+
+    return (error == false && isACK(inputBuffer));
+}
+
+bool WatchPower::setBatteryRechargeVoltage(BatteryRechargeVoltages voltage){
+    char command[50];
+    char inputBuffer[25];
+
+    /* Make Command */
+    sprintf(command, "PBCV%s", BatteryRechargeVoltages2Str[(int)voltage]);
+    appendCRC(command);
+
+    int error = querySolar(command, inputBuffer, sizeof(inputBuffer));
+
+    return (error == false && isACK(inputBuffer));
+}
+
+bool WatchPower::setBatteryReDischargeVoltage(BatteryReDischargeVoltages voltage){
+    char command[50];
+    char inputBuffer[25];
+
+    /* Make Command */
+    sprintf(command, "PBCV%s", BatteryReDischargeVoltages2Str[(int)voltage]);
+    appendCRC(command);
+
+    int error = querySolar(command, inputBuffer, sizeof(inputBuffer));
+
+    return (error == false && isACK(inputBuffer));
+}
+
+bool WatchPower::setBatteryType(BatteryTypes batteryType){
+    char command[50];
+    char inputBuffer[25];
+
+    /* Make Command */
+    sprintf(command, "PBT%02u", batteryType);
+    appendCRC(command);
+
+    int error = querySolar(command, inputBuffer, sizeof(inputBuffer));
+
+    return (error == false && isACK(inputBuffer));
+}
+
+
+void WatchPower::parseSerialNumber(const char *buffer){
+    strncpyTerminated(serialNumer, buffer+1,14);
+}
+
+void WatchPower::parseFirmwareVerPrimary(const char *buffer){
+    strncpyTerminated(firmwareVerPrimary, buffer+7,8);
+}
+
+void WatchPower::parseFirmwareVerSecondary(const char *buffer){
+    strncpyTerminated(firmwareVerSecondary, buffer+8,8);
+}
+
+
+void WatchPower::parseFlags(const char *buffer){
+    bool isEnabled = true;
+    buffer++; /* Skip start byte '(' */
+
+    #define CASE_MAKER(val,field) \
+    case val:                     \
+        field = isEnabled;        \
+        break                     \
+
+    for(int i=0; i<11; i++){
+        switch(buffer[i]){
+        case 'E':
+            isEnabled = true;
+            break;
+        case 'D':
+            isEnabled = false;
+            break;
+            CASE_MAKER('a', flags.buzzer);
+            CASE_MAKER('b', flags.overLoadBypass);
+            CASE_MAKER('j', flags.powerSaving);
+            CASE_MAKER('k', flags.lcdTimeout);
+            CASE_MAKER('u', flags.overloadRestart);
+            CASE_MAKER('v', flags.overTemperatureRestart);
+            CASE_MAKER('x', flags.backlight);
+            CASE_MAKER('y', flags.alarm);
+            CASE_MAKER('z', flags.faultCodeRecord);
+        }
+    }
+
+    #undef CASE_MAKER
+}
+
+void WatchPower::parseRating(const char *buffer){
+    DBG(buffer);
 }
