@@ -1,6 +1,7 @@
 #include <WatchPower.h>
 #include <SparkFunPhant.h>
 #include <stdint.h>
+#include "secrets.h" /* Public and Private Keys for Phant */
 
 #define DBG(str) Particle.publish("DEBUG "#str, String(str))
 
