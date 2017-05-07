@@ -23,10 +23,12 @@
     }while(0)
 
 class WatchPower{
+public:
     /* All enums are position sensitive */
     enum class OutputSourcePriorities{UtilityFirst, SolarFirst, SBU};
     enum class ChargePriorities{UtilityFirst, SolarFirst, SolarAndUtility, SolarOnly};
     enum class BatteryTypes{AGM, Flooded, User};
+    enum class GridRange{Appliance, UPS};
     enum class BatteryRechargeVoltages{V22, V22_5, V23, V23_5, V24, V24_5, V25, V25_5};
     static constexpr char *BatteryRechargeVoltages2Str[] = {
         "22", "22.5", "23", "23.5", "24", "24.5", "25", "25.5"
@@ -35,12 +37,15 @@ class WatchPower{
     static constexpr char *BatteryReDischargeVoltages2Str[] = {
         "00.0", "25", "25.5", "26", "26.5", "27", "27.5", "28", "28.5", "29"
     };
+    enum class OututFrequencies{HZ50, HZ60};
+    static constexpr char *OututFrequencies2Str[] = {
+        "50", "60"
+    };
 
     struct floatEntry{
         char str[10];
         float flt;
     };
-
 
     struct statusEntry{
         char str[8+1]; /* 8 bits */
@@ -112,6 +117,15 @@ class WatchPower{
         } warning;
     };
 
+    struct ratingEntry{
+        floatEntry batteryRechargeVoltage;
+        BatteryTypes batteryType;
+        floatEntry maxACChargingCurrent;
+        floatEntry maxChargingCurrent;
+        OutputSourcePriorities outputSourcePriority;
+        ChargePriorities chargePriority;
+    };
+
 private:
     /* Device general status parameters inquiry */
     static constexpr char *CMD_GENERAL_STATUS = "QPIGS\xB7\xA9";
@@ -132,11 +146,12 @@ private:
 
 
     HardwareSerial* refSer;
+    bool conditioningEnabled = false;
 
-    uint16_t calculateCRC(char *ptr, int count);
+    uint16_t calculateCRC(const char *ptr, int count);
     void appendCRC(char *str);
     bool validateCRC(char *str, uint16_t len);
-    void clearInputBuffer();
+    void clearSerialBuffer();
     uint16_t readLine(char *buffer, uint16_t length);
     void sendLine(const char *str);
     bool querySolar(const char *query, char *buffer, uint16_t bufferLen);
@@ -152,6 +167,7 @@ private:
     void parseRating(const char *buffer);
     void parseFlags(const char *buffer);
     /*--------------------------------*/
+    void conditionData();
 
 
 public:
@@ -185,6 +201,7 @@ public:
 
     /* Constructor and Destructor */
     WatchPower(HardwareSerial &_refSer);
+    WatchPower(HardwareSerial &_refSer, bool _conditioningEnabled);
     ~WatchPower();
 
     /* Get parameters */
@@ -198,6 +215,8 @@ public:
     bool isCharging();
     bool isSolarCharging();
     bool isGridCharging();
+    bool isGridAvailable();
+    bool isSolarAvailable();
 
     /* Set parameters */
     bool setOutputSourcePriority(OutputSourcePriorities prio);

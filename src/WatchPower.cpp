@@ -20,13 +20,17 @@ WatchPower::WatchPower(HardwareSerial &_refSer){
     refreshSettings();
 }
 
+WatchPower::WatchPower(HardwareSerial &_refSer, bool _conditioningEnabled) : WatchPower(_refSer){
+    conditioningEnabled = _conditioningEnabled;
+}
+
 WatchPower::~WatchPower(){
     refSer->end();
 }
 
 /* CRC-CCITT (XModem)
 * Source: http://web.mit.edu/6.115/www/amulet/xmodem.htm */
-uint16_t WatchPower::calculateCRC(char *ptr, int count){
+uint16_t WatchPower::calculateCRC(const char *ptr, int count){
     int  crc;
     char i;
     crc = 0;
@@ -75,7 +79,7 @@ bool WatchPower::isNACK(const char *str){
 }
 
 
-void WatchPower::clearInputBuffer(){
+void WatchPower::clearSerialBuffer(){
     while( refSer->available() ) refSer->read();
 }
 
@@ -94,13 +98,32 @@ void WatchPower::sendLine(const char *str){
 }
 
 bool WatchPower::querySolar(const char *query, char *buffer, uint16_t bufferLen){
-    clearInputBuffer();
+    clearSerialBuffer();
     sendLine(query);
     uint16_t bytesRead = readLine(buffer, bufferLen);
     return validateCRC(buffer, bytesRead);
 }
 
+void WatchPower::conditionData(){
+    if(conditioningEnabled == false) return;
 
+    if(isOnGrid()){
+        /* Battery discharge current should be zero on Grid */
+        strcpy( batteryDischargeCurrent.str, "00000" );
+        batteryDischargeCurrent.flt = 0;
+    }
+
+    if(!isSolarAvailable()){
+        strcpy( batteryVoltageSCC.str, "00.00" );
+        batteryVoltageSCC.flt = 0;
+    }
+
+    /* Interver does not report battery charging current on grid charging */
+    if(isGridCharging()){
+        strcpy( batteryCurrent.str, "NaN" );
+        batteryCurrent.flt = 0.0/0.0; /* NaN */
+    }
+}
 
 void WatchPower::parseQPIGS(const char *buffer){
     buffer++; /* Skip start byte '(' */
@@ -172,17 +195,21 @@ bool WatchPower::refreshData(){
     bool error = false;
     char inputBuffer[256];
 
-    error |= querySolar(CMD_GENERAL_STATUS, inputBuffer, sizeof(inputBuffer));
-    parseQPIGS(inputBuffer);
-    // Particle.publish("_QPIGS", inputBuffer);
-
     error |= querySolar(CMD_MODE_INQUIRY, inputBuffer, sizeof(inputBuffer));
     parseQMOD(inputBuffer);
     // Particle.publish("_QMOD", inputBuffer);
 
+    error |= querySolar(CMD_GENERAL_STATUS, inputBuffer, sizeof(inputBuffer));
+    parseQPIGS(inputBuffer);
+    // Particle.publish("_QPIGS", inputBuffer);
+
     error |= querySolar(CMD_WARNING_STATUS, inputBuffer, sizeof(inputBuffer));
     parseWarnings(inputBuffer);
     // Particle.publish("Warn", inputBuffer);
+
+    if(conditioningEnabled){
+        conditionData();
+    }
 
     return error;
 }
@@ -234,6 +261,24 @@ bool WatchPower::isOnBattery(){
 
 bool WatchPower::isOnGrid(){
     return !isOnBattery();
+}
+
+bool WatchPower::isGridAvailable(){
+    const float MAX_VOLTAGE = 300;
+    const float MIN_VOLTAGE = 100;
+    const float MAX_FREQUENCY = 70;
+    const float MIN_FREQUENCY = 40;
+
+    return (gridVoltage.flt > MIN_VOLTAGE) &&
+           (gridVoltage.flt < MAX_VOLTAGE) &&
+           (gridFreq.flt > MIN_FREQUENCY) &&
+           (gridFreq.flt < MAX_FREQUENCY);
+}
+
+bool WatchPower::isSolarAvailable(){
+    const float MIN_VOLTAGE = 10;
+
+    return (solarVoltage.flt > MIN_VOLTAGE);
 }
 
 
