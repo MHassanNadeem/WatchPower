@@ -42,4 +42,4 @@ Create a [GitHub pull request](https://help.github.com/articles/about-pull-reque
 ## LICENSE
 Copyright 2017 Hassan Nadeem
 
-Licensed under the GLP license
+Licensed under the [MIT license](LICENSE)
